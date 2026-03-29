@@ -1,0 +1,27 @@
+{
+  "pipeline_id": "1234",
+  "sample_metadata": {
+    "sample_id": "1234",
+    "platform": "illumina",
+    "genome_version": "GRCh37"
+  },
+  "tasks": [
+    "task_1" : {
+      "name": "PROCESS_IDAT",
+      "status": "COMPLETED",
+      "duration": "1m",
+      "log_path": "/path/",
+      "work_dir": "/path/workdir",
+      "output": "/path/output"
+    },
+    "task_2" : {
+      "name": "EXTRACT_DATA",
+      "status": "COMPLETED",
+      "duration": "2m",
+      "log_path": "/path/",
+      "work_dir": "/path/workdir",
+      "output": "/path/output"
+    }
+  ]
+}
+
