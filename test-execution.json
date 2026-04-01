@@ -1,27 +1,37 @@
 {
   "pipeline_id": "1234",
   "sample_metadata": {
-    "sample_id": "1234",
+    "sample_id": "W05123",
     "platform": "illumina",
     "genome_version": "GRCh37"
   },
   "tasks": [
-    "task_1" : {
+    {
       "name": "PROCESS_IDAT",
       "status": "COMPLETED",
       "duration": "1m",
-      "log_path": "/path/",
+      "log_path": "/path/task1",
       "work_dir": "/path/workdir",
-      "output": "/path/output"
+      "output": "/path/output",
+      "data": "IDAT PROCESSING COMPLETED "
     },
-    "task_2" : {
+    {
       "name": "EXTRACT_DATA",
       "status": "COMPLETED",
       "duration": "2m",
-      "log_path": "/path/",
+      "log_path": "/path/task2",
       "work_dir": "/path/workdir",
-      "output": "/path/output"
+      "output": "/path/output",
+      "data": "5 - 'GET /pipeline/1234/tasks/0 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/1 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/2 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/2 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/2 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/2 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/1 HTTP/1.1' 200\\nINFO   127.0.0.1:51325 - 'GET /pipeline/1234/tasks/0 HTTP/1.1' 200"
+    },
+        {
+      "name": "MAKE_PLOTS",
+      "status": "STARTED",
+      "duration": "2m",
+      "log_path": "/path/task3",
+      "work_dir": "/path/workdir",
+      "output": "/path/output",
+      "data": "plotting..."
     }
   ]
 }
-
