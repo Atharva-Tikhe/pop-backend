@@ -1,12 +1,19 @@
-import os
-import re
-import shutil
+import json
+import uuid
+import asyncio
+import pandas as pd
+import redis.asyncio as redis
+
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-import json
+from validators.upload_validator import UploadValidator
+
+from models import PostBody
+from celery_app import celery, run_pipeline
+from connection_manager import ConnectionManager
 
 origins = [
     "http://localhost:5173",
@@ -16,7 +23,6 @@ origins = [
 
 app = FastAPI()
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -25,77 +31,84 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+manager = ConnectionManager()
+
+r = redis.Redis(decode_responses=True)
+
+async def redis_listener():
+    pubsub = r.pubsub()
+    await pubsub.subscribe("pipeline")
+    
+    async for msg in pubsub.listen():
+        if msg["type"] != "message":
+            continue
+
+        data = json.loads(msg["data"])
+        print(f"from sub: {data}")
+        id = data["pipeline_id"]
+
+        await manager.send_to_task(id, data)
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(redis_listener())
+
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
-
-def extract_idat_sample_name(file_stem):
-    regex = re.compile(r"(.*)(_Grn|_Red)", flags = re.UNICODE)
-
-    matches = regex.finditer(file_stem)
-
-    groups = []
-
-    for _, match in enumerate(matches, start=1):        
-        for _, group in enumerate(match.groups(), start=1):
-            groups.append(group)
-    
-    return groups[0]
-
-
-async def save_files_and_get_samples(files: List[UploadFile]):
-    sample_manifest = {}
-    sample_manifest['idats'] = []
-    sample_manifest['cel'] = []
-    idat_groups = {}
-
-    # files -> [mytest_sample1_Grn.idat, mytest_sample1_Red.idat, mytest_sample2_Red.idat, mytest_sample2_Red.idat]
-
-    for file in files:        
-        try:
-            file_path = UPLOAD_DIR / file.filename # type: ignore
-            with file_path.open('wb') as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-
-            if file_path.suffix.upper() == '.IDAT':
-                print(file_path.stem)
-                sample_id = extract_idat_sample_name(file_path.stem)
-                print(sample_id)
-                if sample_id not in list(idat_groups.keys()):
-                    idat_groups[sample_id] = [None, None]
-
-                if "Grn" in file_path.stem:
-                    idat_groups[sample_id][0] = str(file_path)
-                elif "Red" in file_path.stem:
-                    idat_groups[sample_id][1] = str(file_path)            
-            elif file_path.suffix.upper() == '.CEL':
-                sample_manifest['cel'].append([file_path.stem, file_path])
-    
-        except Exception as e:
-            print(e)
-            raise HTTPException(
-                status_code=500, detail=f"Could not save {file.filename}: {e}"
-            )
-        finally:
-            await file.close()
-        
-    sample_manifest['idats'].extend([[sid, paths[0], paths[1]] for sid, paths, in idat_groups.items()])
-    
-    return sample_manifest
-
-
+INPUT_DIR = Path("pipeline_inputs")
+INPUT_DIR.mkdir(exist_ok=True)
 
 @app.post("/upload")
 async def upload(files: List[UploadFile] = File(...)):
+    # done
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    manifest = await save_files_and_get_samples(files)
+    validator = UploadValidator(files)
+    manifest = await validator.save_files_and_get_samples()
+    flat_manifest = validator.flatten_manifest()
 
-    print(f'manifest: {manifest}')
-    return manifest
+    return flat_manifest
 
+
+# @app.get("/result/{task_id}")
+# def get_result(task_id: str):
+#     res = celery.AsyncResult(task_id)
+#     return {
+#         "state": res.state,
+#         "result": res.result if res.ready() else None,
+#     }
+
+
+@app.post('/submit')
+def start_pipeline(body: PostBody): 
+    pipeline_id = str(uuid.uuid4())
+    
+    rows = []
+    for sample in body.data:
+        rows.append(json.loads(sample.model_dump_json()))
+    
+    df = pd.DataFrame(rows)
+
+    input_path = INPUT_DIR / f'{pipeline_id}.csv'
+    df.to_csv(input_path)
+
+    # print(input_path)
+    task = run_pipeline.delay(pipeline_id, str(input_path)) # type: ignore
+
+    return JSONResponse({'cel_job_id': task.id, 'pipeline_id': pipeline_id})
+
+
+@app.websocket('/ws/pipeline/{pipeline_id}')
+async def websocket_endpoint(websocket: WebSocket, pipeline_id: str):
+    await manager.connect(pipeline_id, websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        manager.disconnect(pipeline_id, websocket)
 
 
 
