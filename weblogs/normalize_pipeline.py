@@ -1,10 +1,10 @@
 from pydantic import BaseModel, model_validator
-import json
 from datetime import datetime
 
 class Parameters(BaseModel):
     input: str
     outdir: str
+    pipeline_id: str
 
 class TimeStamps(BaseModel):
     dayOfMonth: int
@@ -13,22 +13,18 @@ class TimeStamps(BaseModel):
     minute: int
     year: int
     
-
 class Stats(BaseModel):
     succeededCount: int
     cachedCount: int
     failedCount: int
 
-
 class Workflow(BaseModel):
     start: str | TimeStamps
-    complete: str | TimeStamps
-    duration: str | float
-    success: str
-    resume: str
+    complete: None | TimeStamps | str
+    duration: None | float | int
+    success: bool
+    resume: bool
     stats: Stats
-
-
 
 class PipelineMetadata(BaseModel):
     parameters: Parameters
@@ -54,19 +50,6 @@ class PipelineMetadata(BaseModel):
 
     @model_validator(mode='after')
     def convert_duration(self) -> 'PipelineMetadata':
-        if isinstance(self.workflow.duration, float):
+        if isinstance(self.workflow.duration, int):
             self.workflow.duration = self.workflow.duration / 1000 
         return self
-        
-    
-
-
-metadata = json.load(open('weblog_pipeline_end.json'))
-
-test = PipelineMetadata(**metadata['metadata'])
-
-
-print(test.workflow.start)
-print(test.workflow.complete)
-print(test.workflow.duration)
-

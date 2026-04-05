@@ -5,7 +5,7 @@ import pandas as pd
 import redis.asyncio as redis
 
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
@@ -14,6 +14,10 @@ from validators.upload_validator import UploadValidator
 from models import PostBody
 from celery_app import celery, run_pipeline
 from connection_manager import ConnectionManager
+
+from weblogs.normalize_pipeline import PipelineMetadata
+from weblogs.normalize_trace import Trace
+from snapshot_weblogs import process_pipeline_metadata, process_trace
 
 origins = [
     "http://localhost:5173",
@@ -49,14 +53,18 @@ async def redis_listener():
 
         await manager.send_to_task(id, data)
 
+
+        
+
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(redis_listener())
 
 
 UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
 INPUT_DIR = Path("pipeline_inputs")
+
+UPLOAD_DIR.mkdir(exist_ok=True)
 INPUT_DIR.mkdir(exist_ok=True)
 
 @app.post("/upload")
@@ -79,6 +87,29 @@ async def upload(files: List[UploadFile] = File(...)):
 #         "state": res.state,
 #         "result": res.result if res.ready() else None,
 #     }
+
+
+@app.post('/nextflow/weblog')
+async def get_execution_summary(request: Request):
+    payload = await request.json()
+
+    if 'metadata' in payload.keys():
+        pipeline_update = PipelineMetadata(**payload['metadata'])
+        await process_pipeline_metadata(pipeline_update)
+        
+        global pipeline_id
+        pipeline_id = pipeline_update.parameters.pipeline_id
+
+        received = await r.hgetall(f'pipeline_state:{pipeline_id}')
+        print(received)
+
+    if 'trace' in payload.keys():
+        trace_update = Trace(**payload['trace'])
+        await process_trace(trace_update, pipeline_id)
+        received = await r.hgetall(f'trace:{pipeline_id}')
+        print(received)
+    
+
 
 
 @app.post('/submit')

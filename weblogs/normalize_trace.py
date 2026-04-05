@@ -1,6 +1,5 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, model_validator
 from typing import Optional
-import json
 
 class Trace(BaseModel):
     task_id: int
@@ -16,9 +15,3 @@ class Trace(BaseModel):
         if self.realtime:
             self.actual_time = self.realtime / 1000
         return self
-    
-    
-
-test = json.load(open('weblog_completed.json'))
-model = Trace(**test['trace'])
-print(model.actual_time)
