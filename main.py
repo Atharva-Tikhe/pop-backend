@@ -5,6 +5,7 @@ import pandas as pd
 import redis.asyncio as redis
 
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,20 +26,6 @@ origins = [
     "http://0.0.0.0:5173"
 ]
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-manager = ConnectionManager()
-
-r = redis.Redis(decode_responses=True)
-
 async def redis_listener():
     pubsub = r.pubsub()
     await pubsub.subscribe("pipeline")
@@ -54,11 +41,33 @@ async def redis_listener():
         await manager.send_to_task(id, data)
 
 
-        
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(redis_listener())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(redis_listener())
+
+app = FastAPI(lifespan=lifespan) # type: ignore
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+manager = ConnectionManager()
+
+r = redis.Redis(decode_responses=True)
+
 
 
 UPLOAD_DIR = Path("uploads")
@@ -80,15 +89,6 @@ async def upload(files: List[UploadFile] = File(...)):
     return flat_manifest
 
 
-# @app.get("/result/{task_id}")
-# def get_result(task_id: str):
-#     res = celery.AsyncResult(task_id)
-#     return {
-#         "state": res.state,
-#         "result": res.result if res.ready() else None,
-#     }
-
-
 @app.post('/nextflow/weblog')
 async def get_execution_summary(request: Request):
     payload = await request.json()
@@ -97,16 +97,17 @@ async def get_execution_summary(request: Request):
         pipeline_update = PipelineMetadata(**payload['metadata'])
         await process_pipeline_metadata(pipeline_update)
         
+
         global pipeline_id
         pipeline_id = pipeline_update.parameters.pipeline_id
 
-        received = await r.hgetall(f'pipeline_state:{pipeline_id}')
+        received = await r.hgetall(f'pipeline_state:{pipeline_id}') # type: ignore
         print(received)
 
     if 'trace' in payload.keys():
         trace_update = Trace(**payload['trace'])
         await process_trace(trace_update, pipeline_id)
-        received = await r.hgetall(f'trace:{pipeline_id}')
+        received = await r.hgetall(f'trace:{pipeline_id}') # type: ignore
         print(received)
     
 
@@ -114,6 +115,14 @@ async def get_execution_summary(request: Request):
 
 @app.post('/submit')
 def start_pipeline(body: PostBody): 
+    """
+        flow:
+            1. create a new entry in db
+            2. pipeline_id is given by pgsql (remove python)
+            3. update redis hashes
+            4. use celery to launch (TODO: Add priority queues)
+            5. send back pipeline id
+    """
     pipeline_id = str(uuid.uuid4())
     
     rows = []
@@ -131,8 +140,25 @@ def start_pipeline(body: PostBody):
     return JSONResponse({'cel_job_id': task.id, 'pipeline_id': pipeline_id})
 
 
+@app.get('/snapshot')
+async def send_snapshot():
+    """
+        send all hashes with pipeline state back to client
+        usually after disconnect/refresh
+        TODO: Normalize to typical output via ws 
+    
+    """
+    
+    data = await r.hgetall(f'pipeline_state:*') # type: ignore
+    return JSONResponse({'redis_data': data})
+
+
 @app.websocket('/ws/pipeline/{pipeline_id}')
 async def websocket_endpoint(websocket: WebSocket, pipeline_id: str):
+    """
+        
+    
+    """
     await manager.connect(pipeline_id, websocket)
 
     try:
