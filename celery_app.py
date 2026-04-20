@@ -20,7 +20,7 @@ r = redis.Redis(decode_responses=True)
 def emit(pipeline_id, event, payload=None):
     print(f'publishing: {pipeline_id} - {event} - {payload}')
     r.publish(
-        f"pipeline",
+        "pipeline",
         json.dumps({
             "pipeline_id": pipeline_id,
             "event": event,
@@ -29,27 +29,27 @@ def emit(pipeline_id, event, payload=None):
     )
 
 
-
 @celery.task
 def run_pipeline(pipeline_id, input):
     emit(pipeline_id, "submitted")
 
     emit(pipeline_id, "nextflow_started")
 
-    time.sleep(15)
+    command = f"source ~/.zshrc && conda activate nextflow && cd ~/ncl/dissertation/test-pipeline/ && nextflow run /Users/atharvatikhe/ncl/dissertation/test-pipeline/main.nf --input {input} --outdir /Users/atharvatikhe/ncl/dissertation/test-pipeline/ --pipeline_id '{pipeline_id}'"
+
 
     process = subprocess.Popen(
-        ["echo", f"{input}"],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        shell=True
     )
 
     emit(pipeline_id, "running")
 
-    for line in process.stdout: # type:ignore
-        print(line)
-        emit(pipeline_id, "log", {"line": line.strip()})
+    for line in process.stderr: # type:ignore
+        print(f"CELERY WORKER ERROR: {line}")
 
     process.wait()
 

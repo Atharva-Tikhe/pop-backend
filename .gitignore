@@ -11,3 +11,8 @@ wheels/
 
 uploads/
 uv.lock
+target.txt
+*.json
+*.csv
+
+db/pgdata/*

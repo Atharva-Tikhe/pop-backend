@@ -14,8 +14,8 @@ async def process_pipeline_metadata(data: PipelineMetadata):
 
 
 async def process_trace(data: Trace, pipeline_id):
-    await r.hset(f'trace:{pipeline_id}', 'taskId', str(data.task_id)) # type: ignore
-    await r.hset(f'trace:{pipeline_id}', 'status', str(data.status)) # type: ignore
-    await r.hset(f'trace:{pipeline_id}', 'name', str(data.name)) # type: ignore
-    await r.hset(f'trace:{pipeline_id}', 'workdir', str(data.workdir)) # type: ignore
-    await r.hset(f'trace:{pipeline_id}', 'actualTime', str(data.actual_time)) # type: ignore
+    await r.hset(f'trace:{pipeline_id}:{data.task_id}', 'taskId', str(data.task_id)) # type: ignore
+    await r.hset(f'trace:{pipeline_id}:{data.task_id}', 'status', str(data.status)) # type: ignore
+    await r.hset(f'trace:{pipeline_id}:{data.task_id}', 'name', str(data.name)) # type: ignore
+    await r.hset(f'trace:{pipeline_id}:{data.task_id}', 'workdir', str(data.workdir)) # type: ignore
+    await r.hset(f'trace:{pipeline_id}:{data.task_id}', 'actualTime', str(data.actual_time)) # type: ignore
