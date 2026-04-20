@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: pg-pipeline
+    # restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: pipeline_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/pgdata:/var/lib/postgresql/data
+    
+  redis:
+    image: redis:7
+    container_name: redis-pipeline
+    ports: 
+      - "6379:6379"
+    depends_on:
+      - postgres
+    
+
+volumes:
+  pgdata:
+
