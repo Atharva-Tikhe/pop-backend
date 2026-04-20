@@ -2,7 +2,7 @@ from celery import Celery
 import redis
 import json
 import subprocess
-import time
+import pandas as pd
 
 celery = Celery(
     "pipeline",
@@ -18,7 +18,6 @@ celery.conf.update(
 r = redis.Redis(decode_responses=True)
 
 def emit(pipeline_id, event, payload=None):
-    print(f'publishing: {pipeline_id} - {event} - {payload}')
     r.publish(
         "pipeline",
         json.dumps({
@@ -33,10 +32,9 @@ def emit(pipeline_id, event, payload=None):
 def run_pipeline(pipeline_id, input):
     emit(pipeline_id, "submitted")
 
-    emit(pipeline_id, "nextflow_started")
+    sample_names = pd.read_csv(input)['sample_name']
 
-    command = f"source ~/.zshrc && conda activate nextflow && cd ~/ncl/dissertation/test-pipeline/ && nextflow run /Users/atharvatikhe/ncl/dissertation/test-pipeline/main.nf --input {input} --outdir /Users/atharvatikhe/ncl/dissertation/test-pipeline/ --pipeline_id '{pipeline_id}'"
-
+    command = f"source ~/.zshrc && conda activate nextflow && cd ~/ncl/dissertation/test-pipeline/ && nextflow run /Users/atharvatikhe/ncl/dissertation/test-pipeline/main.nf --input {input} --outdir /Users/atharvatikhe/ncl/dissertation/test-pipeline/ --pipeline_id '{pipeline_id}' --sample_ids {' '.join(sample_names)}"
 
     process = subprocess.Popen(
         command,

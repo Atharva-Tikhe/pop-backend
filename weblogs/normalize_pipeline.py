@@ -5,6 +5,7 @@ class Parameters(BaseModel):
     input: str
     outdir: str
     pipeline_id: str
+    sample_ids: str
 
 class TimeStamps(BaseModel):
     dayOfMonth: int
