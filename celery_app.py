@@ -15,22 +15,31 @@ celery.conf.update(
     result_expires = 3600
 )
 
-r = redis.Redis(decode_responses=True)
+# r = redis.Redis(decode_responses=True)
 
-def emit(pipeline_id, event, payload=None):
-    r.publish(
-        "pipeline",
-        json.dumps({
-            "pipeline_id": pipeline_id,
-            "event": event,
-            "payload": payload or {}
-        })
-    )
+# def emit(pipeline_id, event, payload=None):
+#     r.publish(
+#         "pipeline",
+#         json.dumps({
+#             "pipeline_id": pipeline_id,
+#             "event": event,
+#             "payload": payload or {}
+#         })
+#     )
 
+# def queue_emit(pipeline_id, event, payload = {}):
+#     r.publish(
+#         "celery",
+#         json.dumps({
+#             "pipeline_id": pipeline_id,
+#             "event": event,
+#             "payload": payload
+#         })
+#     )
 
 @celery.task
 def run_pipeline(pipeline_id, input):
-    emit(pipeline_id, "submitted")
+    # queue_emit(pipeline_id, "submitted")
 
     sample_names = pd.read_csv(input)['sample_name']
 
@@ -44,11 +53,11 @@ def run_pipeline(pipeline_id, input):
         shell=True
     )
 
-    emit(pipeline_id, "running")
+    # queue_emit(pipeline_id, "running")
 
     for line in process.stderr: # type:ignore
         print(f"CELERY WORKER ERROR: {line}")
 
     process.wait()
 
-    emit(pipeline_id, "completed", {"exit_code": process.returncode})
+    # queue_emit(pipeline_id, "completed", {"exit_code": process.returncode})

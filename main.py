@@ -3,10 +3,10 @@ import uuid
 import asyncio
 import pandas as pd
 import redis.asyncio as redis
-
+from contextvars import ContextVar
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Request, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
@@ -24,42 +24,15 @@ from service import create_pipeline, update_pipeline
 from db.db import init
 from utils.make_manifest_df import manifest_to_df
 
+r = redis.Redis(decode_responses=True)
+
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://0.0.0.0:5173"
 ]
-
-async def redis_listener():
-    pubsub = r.pubsub()
-    await pubsub.subscribe("pipeline")
     
-    async for msg in pubsub.listen():
-        if msg["type"] != "message":
-            continue
-
-        data = json.loads(msg["data"])
-        print(f"from sub: {data}")
-        id = data["pipeline_id"]
-
-        await manager.send_to_task(id, data)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await init()
-    task = asyncio.create_task(redis_listener())
-    try:
-        yield
-    finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-app = FastAPI(lifespan=lifespan) # type: ignore
+app = FastAPI() # type: ignore
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,9 +43,6 @@ app.add_middleware(
 )
 
 manager = ConnectionManager()
-
-r = redis.Redis(decode_responses=True)
-
 
 UPLOAD_DIR = Path("uploads")
 INPUT_DIR = Path("pipeline_inputs")
@@ -92,37 +62,6 @@ async def upload(files: List[UploadFile] = File(...)):
 
     return flat_manifest
 
-
-@app.post('/nextflow/weblog')
-async def get_execution_summary(request: Request):
-    payload = await request.json()
-
-    global pipeline_id
-
-    if 'metadata' in payload.keys():
-        pipeline_update = PipelineMetadata(**payload['metadata'])
-        await process_pipeline_metadata(pipeline_update)
-
-        global pipeline_id
-        pipeline_id = pipeline_update.parameters.pipeline_id
-
-        received = await r.hgetall(f'pipeline_state:{pipeline_id}') # type: ignore
-        print(received)
-        await r.publish("pipeline", str(payload))
-        print('sent')
-        
-    if 'trace' in payload.keys():
-        trace_update = Trace(**payload['trace'])
-        await process_trace(trace_update, pipeline_id)
-
-        received = await r.hgetall(f'trace:{pipeline_id}:{trace_update.task_id}') # type: ignore
-        print(received)
-        await r.publish("pipeline", str(payload))
-        print('sent')
-    
-
-
-
 @app.post('/submit')
 async def start_pipeline(body: PostBody): 
     """
@@ -134,19 +73,59 @@ async def start_pipeline(body: PostBody):
             5. send back pipeline id
     """
     pipeline_id = str(uuid.uuid4())
-    
     df = manifest_to_df(body.data)
-
     input_path = INPUT_DIR / f'{pipeline_id}.csv'
-    
     df.to_csv(input_path)
 
-    task = run_pipeline.delay(pipeline_id, str(input_path)) # type: ignore
+    try:
+        task = run_pipeline.delay(pipeline_id, str(input_path)) # type: ignore
+        if task.id:
+            await create_pipeline(df, input_path, pipeline_id)
+            await r.hset(f'pipeline_state:{pipeline_id}', 
+                                mapping={
+                                    "id": pipeline_id, 
+                                    "samples": " ".join(df['sample_name'].astype(str)), 
+                                    "status": "QUEUED", # Add this for your UI!
+                                    "started": "", 
+                                    "completed": "None", 
+                                    "numSuccessed": '0',
+                                    'numFailed': '0', 
+                                    'duration': '0'
+                                }) # type:ignore
+        return JSONResponse({'cel_job_id': task.id, 'pipeline_id': pipeline_id})        
+    except Exception as e:
+        print(f'Failed to start task: {e}')
+        raise HTTPException(status_code=500, detail="Internal Broker Error: Could not start pipeline")
 
-    pipeline_id = await create_pipeline(df, input_path, pipeline_id)
     
-    return JSONResponse({'cel_job_id': 'task.id', 'pipeline_id': pipeline_id})
 
+@app.post('/nextflow/weblog')
+async def get_execution_summary(request: Request):
+    payload = await request.json()
+    # pipeline_id_var: ContextVar[str] = ContextVar("pipeline_id", default="unknown")
+    
+    if 'metadata' in payload.keys():
+        pipeline_update = PipelineMetadata(**payload['metadata'])
+        await process_pipeline_metadata(pipeline_update)
+        
+        await r.set(f'run_to_pid:{payload["runId"]}', pipeline_update.parameters.pipeline_id, ex = 86400)
+        # pipeline_id_var.set(pipeline_update.parameters.pipeline_id)
+
+        await r.publish(f"updates:{pipeline_update.parameters.pipeline_id}", pipeline_update.model_dump_json())
+        print(f'published: {pipeline_update.parameters.pipeline_id}')
+            
+    if 'trace' in payload.keys():
+        trace_update = Trace(**payload['trace'])
+        
+        # pid = pipeline_id_var.get()
+        pid = await r.get(f'run_to_pid:{payload["runId"]}')
+        if pid:
+            await process_trace(trace_update, pid)
+            await r.publish(f"updates:{pid}", trace_update.model_dump_json())
+            print(f'published(trace): {pid}')
+        else:
+            print(f"Trace without associated pid: {payload['runId']}")
+        
 
 @app.get('/snapshot')
 async def send_snapshot():
@@ -173,6 +152,7 @@ async def send_snapshot():
     pipeline_snapshots = dict(zip(ps_keys, ps_results))
     trace_snapshots = dict(zip(tr_keys, tr_results))
 
+    # Get only completed/active pipelines
     active_pipelines = []
     for pipeline_id, pipeline_data in pipeline_snapshots.items():
         if pipeline_data['completed'] == "None":
@@ -186,53 +166,26 @@ async def send_snapshot():
             if active['id'] == trace_id.split(':')[1]:
                 active['tasks'].append(trace_data)
  
-    # 3. Map keys to their data for a cleaner JSON response
     return JSONResponse({
         'redis_data': active_pipelines,
     })
 
 
 @app.websocket('/ws/pipeline/{pipeline_id}')
-async def websocket_endpoint(websocket: WebSocket, pipeline_id: str):
-
+async def websocket_endpoint(pipeline_id: str, websocket: WebSocket):
     await manager.connect(pipeline_id, websocket)
+    pubsub = r.pubsub()
+    await pubsub.subscribe(f"updates:{pipeline_id}")
+    await manager.send_pipeline_updates(pipeline_id, {"test": "test"}, websocket)
 
     try:
-        while True:
-            await websocket.receive_text()
-    except Exception:
+        async for msg in pubsub.listen():
+            if msg["type"] != "message":
+                continue
+            data = json.loads(msg["data"])
+            await manager.send_pipeline_updates(pipeline_id, data, websocket)
+            print(f'sent {data} for {pipeline_id} using {websocket}')
+
+    except WebSocketDisconnect:
         manager.disconnect(pipeline_id, websocket)
-
-
-
-@app.get("/pipeline")
-def get_pipeline():
-    temp = json.load(open("./test-execution.json", "r"))
-    return JSONResponse(temp)
-
-@app.get("/pipelines/active")
-def get_active_pipeline():
-    temp = json.load(open("./test-execution.json", "r"))
-    temp2 = json.load(open("./test-execution-2.json", "r"))
-    return JSONResponse([temp, temp2])
-
-@app.get("/pipeline/{pipeline_id}")
-def get_pipeline_by_id(pipeline_id):
-    temp = json.load(open('./test-execution.json', 'r'))
-    print(temp)
-    if temp['pipeline_id'] == pipeline_id:
-        return JSONResponse(temp)
-    else:
-        return HTTPException(404)
-    
-@app.get("/pipeline/{pipeline_id}/tasks/{task_id}")
-def get_task_by_id(pipeline_id, task_id):
-    if pipeline_id == '1234':
-        temp = json.load(open('./test-execution.json', 'r'))
-    else:
-        temp = json.load(open('./test-execution-2.json', 'r'))
-
-    if temp['pipeline_id'] == pipeline_id:
-        return JSONResponse(temp['tasks'][int(task_id)])
-    else:
-        return HTTPException(404)
+        print(f'disconnected {pipeline_id}')
