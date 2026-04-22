@@ -85,7 +85,7 @@ async def start_pipeline(body: PostBody):
                                 mapping={
                                     "id": pipeline_id, 
                                     "samples": " ".join(df['sample_name'].astype(str)), 
-                                    "status": "QUEUED", # Add this for your UI!
+                                    "status": "QUEUED",
                                     "started": "", 
                                     "completed": "None", 
                                     "numSuccessed": '0',
