@@ -1,11 +1,8 @@
 import json
 import uuid
-import asyncio
-import pandas as pd
 import redis.asyncio as redis
-from contextvars import ContextVar
+
 from pathlib import Path
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, Request, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,10 +15,10 @@ from connection_manager import ConnectionManager
 
 from weblogs.normalize_pipeline import PipelineMetadata
 from weblogs.normalize_trace import Trace
+from weblogs.redis_hash_to_dict import get_schema, transform_to_schema
 from snapshot_weblogs import process_pipeline_metadata, process_trace
 from service import create_pipeline, update_pipeline
 
-from db.db import init
 from utils.make_manifest_df import manifest_to_df
 
 r = redis.Redis(decode_responses=True)
@@ -52,7 +49,6 @@ INPUT_DIR.mkdir(exist_ok=True)
 
 @app.post("/upload")
 async def upload(files: List[UploadFile] = File(...)):
-    # done
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
@@ -81,18 +77,36 @@ async def start_pipeline(body: PostBody):
         task = run_pipeline.delay(pipeline_id, str(input_path)) # type: ignore
         if task.id:
             await create_pipeline(df, input_path, pipeline_id)
-            await r.hset(f'pipeline_state:{pipeline_id}', 
-                                mapping={
-                                    "id": pipeline_id, 
-                                    "samples": " ".join(df['sample_name'].astype(str)), 
-                                    "status": "QUEUED",
-                                    "started": "", 
-                                    "completed": "None", 
-                                    "numSuccessed": '0',
-                                    'numFailed': '0', 
-                                    'duration': '0'
-                                }) # type:ignore
-        return JSONResponse({'cel_job_id': task.id, 'pipeline_id': pipeline_id})        
+            seed_pipeline = get_schema()
+            payload = transform_to_schema(seed_pipeline, {
+                "id": pipeline_id,
+                "input": str(input_path),
+                "outdir": "",
+                "samples": ", ".join(df['sample_name'].astype(str)),
+                "started": "",
+                "completed": "",
+                "duration": "",
+                "success": "",
+                "resume": "",
+                "succeededCount": "",
+                "cachedCount": "",
+                "failedCount": ""
+            })
+            await r.hset(f'pipeline_state:{pipeline_id}', mapping = {
+                "id": pipeline_id,
+                "input": str(input_path),
+                "outdir": "",
+                "samples": ", ".join(df['sample_name'].astype(str)),
+                "started": "",
+                "completed": "",
+                "duration": "",
+                "success": "",
+                "resume": "",
+                "succeededCount": "",
+                "cachedCount": "",
+                "failedCount": ""
+            }) # type:ignore
+            return JSONResponse({'cel_job_id': task.id, 'pipeline_id': pipeline_id, 'seedPipeline' : payload})
     except Exception as e:
         print(f'Failed to start task: {e}')
         raise HTTPException(status_code=500, detail="Internal Broker Error: Could not start pipeline")
@@ -102,26 +116,24 @@ async def start_pipeline(body: PostBody):
 @app.post('/nextflow/weblog')
 async def get_execution_summary(request: Request):
     payload = await request.json()
-    # pipeline_id_var: ContextVar[str] = ContextVar("pipeline_id", default="unknown")
     
     if 'metadata' in payload.keys():
         pipeline_update = PipelineMetadata(**payload['metadata'])
         await process_pipeline_metadata(pipeline_update)
         
         await r.set(f'run_to_pid:{payload["runId"]}', pipeline_update.parameters.pipeline_id, ex = 86400)
-        # pipeline_id_var.set(pipeline_update.parameters.pipeline_id)
-
+                
         await r.publish(f"updates:{pipeline_update.parameters.pipeline_id}", pipeline_update.model_dump_json())
-        print(f'published: {pipeline_update.parameters.pipeline_id}')
+        print(f'published(pipeline): {pipeline_update.parameters.pipeline_id}')
             
     if 'trace' in payload.keys():
         trace_update = Trace(**payload['trace'])
         
-        # pid = pipeline_id_var.get()
         pid = await r.get(f'run_to_pid:{payload["runId"]}')
         if pid:
             await process_trace(trace_update, pid)
             await r.publish(f"updates:{pid}", trace_update.model_dump_json())
+
             print(f'published(trace): {pid}')
         else:
             print(f"Trace without associated pid: {payload['runId']}")
@@ -129,8 +141,7 @@ async def get_execution_summary(request: Request):
 
 @app.get('/snapshot')
 async def send_snapshot():
-    # 1. Find all keys matching the patterns
-    # Note: match_keys will be a list of keys like ['pipeline_state:1', 'pipeline_state:2']
+    # match_keys will be a list of keys like ['pipeline_state:1', 'pipeline_state:2']
     ps_keys = []
     async for key in r.scan_iter(match='pipeline_state:*'):
         ps_keys.append(key)
@@ -139,7 +150,6 @@ async def send_snapshot():
     async for key in r.scan_iter(match='trace:*'):
         tr_keys.append(key)
 
-    # 2. Use a pipeline to fetch all hash data efficiently
     async with r.pipeline(transaction=False) as pipe:
         for key in ps_keys:
             pipe.hgetall(key)
@@ -152,20 +162,31 @@ async def send_snapshot():
     pipeline_snapshots = dict(zip(ps_keys, ps_results))
     trace_snapshots = dict(zip(tr_keys, tr_results))
 
-    # Get only completed/active pipelines
     active_pipelines = []
     for pipeline_id, pipeline_data in pipeline_snapshots.items():
         if pipeline_data['completed'] == "None":
-            merged_data = {"id": pipeline_id.split(':')[1], 'tasks': []}
-            merged_data.update(pipeline_data)
-            active_pipelines.append(merged_data)
-    
+            pipeline = get_schema()
+            pipeline['parameters']['input'] = pipeline_data.get('input', '')
+            pipeline['parameters']['outdir'] = pipeline_data.get('outdir', '')
+            pipeline['parameters']['pipeline_id'] = str(pipeline_id).split(':')[1]
+            pipeline['parameters']['sample_ids'] = pipeline_data.get('samples', '')
+
+            pipeline['workflow']['start'] = pipeline_data['started']
+            pipeline['workflow']['complete'] = pipeline_data['completed']
+            pipeline['workflow']['duration'] = pipeline_data['duration']
+            pipeline['workflow']['success'] = pipeline_data['success']
+            pipeline['workflow']['resume'] = pipeline_data['resume']
+            pipeline['workflow']['stats']['succeededCount'] = pipeline_data['succeededCount']
+            pipeline['workflow']['stats']['cachedCount'] = pipeline_data['cachedCount']
+            pipeline['workflow']['stats']['failedCount'] = pipeline_data['failedCount']
+            active_pipelines.append(pipeline)
     
     for trace_id, trace_data in trace_snapshots.items():
-        for active in active_pipelines:
-            if active['id'] == trace_id.split(':')[1]:
-                active['tasks'].append(trace_data)
- 
+        for pipeline in active_pipelines:
+            if pipeline['parameters']['id'] == trace_id.split(':')[1]:
+                pipeline['tasks'].append(trace_data)
+
+
     return JSONResponse({
         'redis_data': active_pipelines,
     })
@@ -176,7 +197,6 @@ async def websocket_endpoint(pipeline_id: str, websocket: WebSocket):
     await manager.connect(pipeline_id, websocket)
     pubsub = r.pubsub()
     await pubsub.subscribe(f"updates:{pipeline_id}")
-    await manager.send_pipeline_updates(pipeline_id, {"test": "test"}, websocket)
 
     try:
         async for msg in pubsub.listen():

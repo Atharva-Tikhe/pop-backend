@@ -9,6 +9,8 @@ class Trace(BaseModel):
     workdir: str
     realtime: Optional[int] = 0    
     actual_time: float = 0.0
+    cpus: int = 1
+    hash: str
 
     @model_validator(mode='after')
     def calculate_time(self) -> 'Trace':
