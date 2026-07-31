@@ -11,7 +11,9 @@ class Trace(BaseModel):
     actual_time: float = 0.0
     cpus: int = 1
     hash: str
-
+    runId: str
+    runName: str
+    
     @model_validator(mode='after')
     def calculate_time(self) -> 'Trace':
         if self.realtime:

@@ -5,7 +5,7 @@ class Parameters(BaseModel):
     input: str
     outdir: str
     pipeline_id: str
-    sample_ids: str
+    sample_ids: str | None
 
 class TimeStamps(BaseModel):
     dayOfMonth: int
@@ -26,10 +26,12 @@ class Workflow(BaseModel):
     success: bool
     resume: bool
     stats: Stats
+    runName: str
 
 class PipelineMetadata(BaseModel):
     parameters: Parameters
     workflow: Workflow
+    runId: str
 
     @model_validator(mode='after')
     def calculate_time(self) -> 'PipelineMetadata':
