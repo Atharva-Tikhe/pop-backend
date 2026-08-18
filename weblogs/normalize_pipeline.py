@@ -1,4 +1,6 @@
-from pydantic import BaseModel, model_validator
+# import uuid
+from uuid import UUID
+from pydantic import BaseModel, model_validator, UUID4
 from datetime import datetime
 
 class Parameters(BaseModel):
@@ -6,6 +8,8 @@ class Parameters(BaseModel):
     outdir: str
     pipeline_id: str
     sample_ids: str | None
+    cohort_id: UUID | None
+    threshold: float | str
 
 class TimeStamps(BaseModel):
     dayOfMonth: int
@@ -56,3 +60,11 @@ class PipelineMetadata(BaseModel):
         if isinstance(self.workflow.duration, int):
             self.workflow.duration = self.workflow.duration / 1000 
         return self
+    
+class CohortMetadata(BaseModel):
+    name: str = "ALL_cohort"
+    samplesheet : str
+    status: str = "SUBMITTED"
+    threshold : str
+    panel : str = 'ALLTOGETHER1'
+    output_dir: str

@@ -6,14 +6,14 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # import json
-from weblogs.normalize_pipeline import PipelineMetadata
+from weblogs.normalize_pipeline import PipelineMetadata, CohortMetadata
 from weblogs.normalize_trace import Trace
 
 from db.db import SessionLocal
 from db.services.execution_service import ExecutionService
 from weblogs.normalize_pipeline import PipelineMetadata
 from weblogs.normalize_trace import Trace
-from db.model import Pipeline, PipelineTask
+from db.model import Pipeline, PipelineTask, Cohort
 from sqlalchemy import delete, select
 from fastapi import Form, UploadFile, File, status, HTTPException
 from typing import List
@@ -21,6 +21,7 @@ import pandas as pd
 import io
 import subprocess
 import os
+import uuid
 
 app = FastAPI()
 
@@ -53,7 +54,9 @@ async def get_execution_summary(request: Request):
 
             metadata = PipelineMetadata(**payload["metadata"])
 
+            
             await service.upsert_pipeline(metadata)
+            
 
         if "trace" in payload:
 
@@ -64,21 +67,11 @@ async def get_execution_summary(request: Request):
 
             await service.upsert_task(trace)
 
+
     return JSONResponse(
         content={"message": "Webhook processed"},
         status_code=200,
     )
-
-    if "metadata" in payload.keys():
-        payload["metadata"]["runId"] = payload["runId"]
-        pipeline_update = PipelineMetadata(**payload["metadata"])
-        print(pipeline_update)
-
-    if "trace" in payload.keys():
-        payload["trace"]["runId"] = payload["runId"]
-        trace_update = Trace(**payload["trace"])
-        print(trace_update)
-        print(trace_update.runId)
 
 
 @app.get("/pipelines")
@@ -109,59 +102,81 @@ async def get_uploaded_sheet(
     is_default: bool = Form(False),
     files: List[UploadFile] = File(...),
 ):
-    validated_files = []
-    print(threshold, is_default)
-
-    # is_default = bool(is_default)
-
     template_df = pd.read_csv("samplesheet_b6_single.csv")
-
+    validated_files = []
+    
     for file in files:
-        # Read file into memory
         contents = await file.read()
-
-        try:
-            # Parse CSV to verify columns
-            df = pd.read_csv(io.BytesIO(contents))
-            df.to_csv(f"uploads/{file.filename}", index=False)
-
-            if list(df.columns) != list(template_df.columns):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"File '{file.filename}' is not a valid sample sheet",
-                )
-        except Exception as e:
-            print(e)
-            if isinstance(e, HTTPException):
-                raise e
+        
+        # try:
+        df = pd.read_csv(io.BytesIO(contents))
+        
+    
+        if list(df.columns) != list(template_df.columns):
+            print(df.columns)
+            print(template_df.columns)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to parse '{file.filename}'. Ensure it is a valid CSV.",
+                detail=f"File '{file.filename}' is not a valid sample sheet",
             )
-
-        validated_files.append(os.path.abspath(f"uploads/{file.filename}"))
-        launched_files = []
-
-        cwd = os.getcwd()
-        os.chdir("/home/atharva/dev/pipeline/Atharva-Tikhe-picnac/launcher/")
-        for file in validated_files:
-            task = subprocess.Popen(
-                f"python3 runner.py {file} {output_dir} {threshold}", shell=True
+        
+        path = f'uploads/{file.filename}'
+        df.to_csv(path, index=False)
+        # df.to_csv(f"/home/atharva/dev/executions/{output_dir}/{file.filename}", index = False)
+        validated_files.append(os.path.abspath(path))
+        # except HTTPException:
+        #     raise
+        # except Exception as e:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_400_BAD_REQUEST,
+        #         detail=f"Failed to parse '{file.filename}'. Ensure it is a valid CSV.",
+        #     ) from e
+    
+    async with SessionLocal() as db:
+        service = ExecutionService(db)
+        cohort_meta = CohortMetadata(
+            samplesheet = str(files[0].filename),
+            threshold = threshold,
+            output_dir=output_dir
+        )
+        
+        cohort = await service.create_cohort(cohort_meta)
+        cohort_id = cohort.id
+    
+    print(f"Created cohort: {cohort_id}")
+        
+    
+    try:
+        for file_path in validated_files:
+            result = subprocess.run(
+                [
+                    "python3",
+                    "runner.py",
+                    file_path,
+                    output_dir,
+                    threshold,
+                    str(cohort_id),
+                ],
+                cwd="/home/atharva/dev/pipeline/Atharva-Tikhe-picnac/launcher/",
+                check=True,
             )
-            returncode = task.wait()
-            print(task.stdout)
-            launched_files.append(returncode)
-        os.chdir(cwd)
-
-        print(launched_files)
-        return {
-            "message": f"Sheet submitted! ",
-            "output_dir": output_dir,
-            "processed_files": validated_files,
-        }
-
+            print(f"Pipeline completed for {file_path}")
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Pipeline execution failed "
+                f"with exit code {e.returncode}"
+            ),
+        ) from e
+        
+    return {
+        "message": "Sheet submitted",
+        "cohort_id": str(cohort_id),
+        "output_dir": output_dir,
+        "processed_files": validated_files,
+    }
 
 @app.get("/health")
 async def send_health():
     return JSONResponse({"server": "healthy"})
-
