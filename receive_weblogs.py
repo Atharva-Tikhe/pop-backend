@@ -177,6 +177,12 @@ async def get_uploaded_sheet(
         "processed_files": validated_files,
     }
 
+@app.get("/cohorts")
+async def get_cohorts():
+    async with SessionLocal() as db:
+        service = ExecutionService(db)
+        return await service.get_cohorts()
+
 @app.get("/health")
 async def send_health():
     return JSONResponse({"server": "healthy"})

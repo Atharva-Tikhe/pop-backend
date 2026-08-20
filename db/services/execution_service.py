@@ -288,6 +288,10 @@ class ExecutionService:
 
         return "FAILED"
 
+    async def get_cohorts(self):
+        result = await self.db.execute(select(Cohort))
+        return result.scalars().all()
+
     async def get_pipelines(self):
         result = await self.db.execute(select(Pipeline).where(Pipeline.status == "RUNNING").order_by(Pipeline.created_at.desc()))
         
