@@ -21,7 +21,7 @@ import pandas as pd
 import io
 import subprocess
 import os
-import uuid
+import shutil
 
 app = FastAPI()
 
@@ -54,9 +54,7 @@ async def get_execution_summary(request: Request):
 
             metadata = PipelineMetadata(**payload["metadata"])
 
-            
             await service.upsert_pipeline(metadata)
-            
 
         if "trace" in payload:
 
@@ -66,7 +64,6 @@ async def get_execution_summary(request: Request):
             trace = Trace(**payload["trace"])
 
             await service.upsert_task(trace)
-
 
     return JSONResponse(
         content={"message": "Webhook processed"},
@@ -104,14 +101,13 @@ async def get_uploaded_sheet(
 ):
     template_df = pd.read_csv("samplesheet_b6_single.csv")
     validated_files = []
-    
+
     for file in files:
         contents = await file.read()
-        
+
         # try:
         df = pd.read_csv(io.BytesIO(contents))
-        
-    
+
         if list(df.columns) != list(template_df.columns):
             print(df.columns)
             print(template_df.columns)
@@ -119,8 +115,8 @@ async def get_uploaded_sheet(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"File '{file.filename}' is not a valid sample sheet",
             )
-        
-        path = f'uploads/{file.filename}'
+
+        path = f"uploads/{file.filename}"
         df.to_csv(path, index=False)
         # df.to_csv(f"/home/atharva/dev/executions/{output_dir}/{file.filename}", index = False)
         validated_files.append(os.path.abspath(path))
@@ -131,21 +127,20 @@ async def get_uploaded_sheet(
         #         status_code=status.HTTP_400_BAD_REQUEST,
         #         detail=f"Failed to parse '{file.filename}'. Ensure it is a valid CSV.",
         #     ) from e
-    
+
     async with SessionLocal() as db:
         service = ExecutionService(db)
         cohort_meta = CohortMetadata(
-            samplesheet = str(files[0].filename),
-            threshold = threshold,
-            output_dir=output_dir
+            samplesheet=str(files[0].filename),
+            threshold=threshold,
+            output_dir=output_dir,
         )
-        
+
         cohort = await service.create_cohort(cohort_meta)
         cohort_id = cohort.id
-    
+
     print(f"Created cohort: {cohort_id}")
-        
-    
+
     try:
         for file_path in validated_files:
             result = subprocess.run(
@@ -164,12 +159,9 @@ async def get_uploaded_sheet(
     except subprocess.CalledProcessError as e:
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"Pipeline execution failed "
-                f"with exit code {e.returncode}"
-            ),
+            detail=(f"Pipeline execution failed " f"with exit code {e.returncode}"),
         ) from e
-        
+
     return {
         "message": "Sheet submitted",
         "cohort_id": str(cohort_id),
@@ -177,12 +169,32 @@ async def get_uploaded_sheet(
         "processed_files": validated_files,
     }
 
+
 @app.get("/cohorts")
 async def get_cohorts():
     async with SessionLocal() as db:
         service = ExecutionService(db)
         return await service.get_cohorts()
 
+
+@app.delete("/cohorts/{cohort_id}")
+async def delete_cohort(cohort_id, status_code=status.HTTP_204_NO_CONTENT):
+    async with SessionLocal() as db:
+        service = ExecutionService(db)
+        deleted, cohort = await service.delete_cohort(cohort_id)
+
+        dest = f"/home/atharva/dev/executions/{cohort.output_dir}/"
+
+        shutil.rmtree(dest)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cohort {cohort_id} not found.",
+            )
+
+
 @app.get("/health")
 async def send_health():
     return JSONResponse({"server": "healthy"})
+

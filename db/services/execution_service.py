@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.model import Pipeline, PipelineTask, Cohort
 from weblogs.normalize_pipeline import PipelineMetadata, CohortMetadata
@@ -101,6 +102,21 @@ class ExecutionService:
         await self.db.refresh(cohort)
 
         return cohort
+
+    async def delete_cohort(self, cohort_id) -> (bool, Cohort):
+        result = await self.db.execute(
+            select(Cohort)
+            .where(Cohort.id == cohort_id)
+            .options(selectinload(Cohort.pipelines).selectinload(Pipeline.tasks))
+        )
+        cohort = result.scalar_one_or_none()
+
+        if cohort is None:
+            return False, cohort
+
+        await self.db.delete(cohort)
+        await self.db.commit()
+        return True, cohort
 
     async def upsert_pipeline(self, metadata: PipelineMetadata) -> Pipeline:
         """
@@ -290,4 +306,3 @@ class ExecutionService:
             .order_by(Pipeline.created_at.desc())
         )
         return result.scalars().all()
-
