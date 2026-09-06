@@ -1,5 +1,8 @@
 # Portal Backend - Project Context & Mandates
 
+> [!NOTE]
+> This repo is a part of application developed for the Leukaemia Research Cytogenomics Group at Newcastle University
+
 ## Project Overview
 This project is a FastAPI-based orchestration layer designed to manage, trigger, and monitor Nextflow pipelines. It provides an interface for user uploads, manifest generation, and real-time execution tracking.
 
@@ -7,7 +10,7 @@ This project is a FastAPI-based orchestration layer designed to manage, trigger,
 - **Web Framework:** FastAPI (Asynchronous Python)
 - **Task Queue:** Celery with Redis broker
 - **Persistence:** PostgreSQL (SQLAlchemy ORM)
-- **Real-time Updates:** Redis Pub/Sub + WebSockets
+- **Real-time Updates:** ~~Redis Pub/Sub + WebSockets~~ Polling-based updates
 - **Validation:** Pydantic models
 
 ## Architectural Mandates
