@@ -1,6 +1,9 @@
-# Portal Backend - Project Context & Mandates
+# Pipeline Observability Platform Backend - Project Context & Mandates
 
 ## Project Overview
+This repository is the FastAPI-based backend for POP. It is designed to manage, trigger and monitor Nextflow pipelines.
+
+
 This project is a FastAPI-based orchestration layer designed to manage, trigger, and monitor Nextflow pipelines. It provides an interface for user uploads, manifest generation, and real-time execution tracking.
 
 ## Core Stack
