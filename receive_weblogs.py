@@ -105,7 +105,6 @@ async def get_uploaded_sheet(
     for file in files:
         contents = await file.read()
 
-        # try:
         df = pd.read_csv(io.BytesIO(contents))
 
         if list(df.columns) != list(template_df.columns):
@@ -120,13 +119,6 @@ async def get_uploaded_sheet(
         df.to_csv(path, index=False)
         # df.to_csv(f"/home/atharva/dev/executions/{output_dir}/{file.filename}", index = False)
         validated_files.append(os.path.abspath(path))
-        # except HTTPException:
-        #     raise
-        # except Exception as e:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #         detail=f"Failed to parse '{file.filename}'. Ensure it is a valid CSV.",
-        #     ) from e
 
     async with SessionLocal() as db:
         service = ExecutionService(db)
@@ -174,7 +166,11 @@ async def get_uploaded_sheet(
 async def get_cohorts():
     async with SessionLocal() as db:
         service = ExecutionService(db)
-        return await service.get_cohorts()
+        cohorts = await service.get_cohorts()
+        for cohort in cohorts:
+            if not os.path.exists(f"/home/atharva/dev/executions/{cohort.output_dir}"):
+                cohorts.remove(cohort)
+        return cohorts
 
 
 @app.delete("/cohorts/{cohort_id}")
@@ -183,9 +179,12 @@ async def delete_cohort(cohort_id, status_code=status.HTTP_204_NO_CONTENT):
         service = ExecutionService(db)
         deleted, cohort = await service.delete_cohort(cohort_id)
 
-        dest = f"/home/atharva/dev/executions/{cohort.output_dir}/"
+        try:
+            dest = f"/home/atharva/dev/executions/{cohort.output_dir}/"
 
-        shutil.rmtree(dest)
+            shutil.rmtree(dest)
+        except Exception:
+            print(f"no output dir for {cohort.id}")
 
         if not deleted:
             raise HTTPException(
@@ -197,4 +196,3 @@ async def delete_cohort(cohort_id, status_code=status.HTTP_204_NO_CONTENT):
 @app.get("/health")
 async def send_health():
     return JSONResponse({"server": "healthy"})
-
